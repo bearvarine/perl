@@ -1,0 +1,1427 @@
+#!/usr/bin/env perl
+##
+##   findtext.pl   by D. S. "Pat" Patterson   12 May 1994
+##
+##   2018-04-04 - Full Rewrite
+##   2018-04-15 - Make -v mention excluded files and directories.
+##   2018-05-20 - Make -R '' work properly.
+##   2018-06-15 - Fix $FINDTEXT_ARGS.
+##
+## NAME
+##   findtext - displays filename and lines containing matches to
+##   RegExpr  in  text files in current or deeper subdirectories.
+##   Optionally replaces matches with a replacement text string.
+##
+##   * Windows Version *
+##   * Note:  Single-quotes do not work to quote strings on the
+##   *        Shell command line.  Use double-quotes.
+##
+## DESCRIPTION
+##   findtext will search text files for a match to the Regular
+##   Expression in the current and deeper subdirectories.  Output
+##   consists of a relative path/filename followed by lines con-
+##   taining matches to the regular expression prepended with
+##   "<".
+##
+##   findtext only searches text files and skips any file that
+##   appears to have binary or non-text contents. findtext
+##   searches for any string match by default, but whole words or
+##   arbitrarily complex regular expressions can be searched for
+##   using the -w, -W, -e, -E, or -P options.
+##
+##   In  Shell-style  search  expressions,  /? + */  are treated as
+##   /.? .+ .*/,  other nonalphanumerics are treated as literals,
+##   and expressions are assumed to be right & left-justified.
+##
+##   findtext optionally replaces matched strings with a replace-
+##   ment text string.  To use captured search parameters in the
+##   replacement string, use the \1 \2 ... syntax in the replace-
+##   ment string and use the -P argument instead of the -E arg.
+##
+## SYNTAX
+##   findtext [-S] "TextSearchExpr"
+##
+## OPTIONS
+##   -a   Alphabetize (sort) file listing before searching.
+##
+##   -b   Backup modified files.  (Can't be used with -F)
+##
+##   -B   Bare mode. List lines matching text search criteria
+##        without '<' markers.
+##
+##   -c   Confirm  replacments.  Program  prompts "Confirm: ([y]/n/f/a)"
+##        where:
+##          y - confirm change,
+##          n - do not make change,
+##          f - confirm change for remainder of current file,
+##          a - confirm all further changes.
+##
+##   -d   Dry run replacements (display but don't actually write to
+##        file proposed changes)
+##
+##   -D "InputRecSep"   Specify alternate input record delimiter (separator).
+##       Default is \n (line by line).
+##
+##   -e   File search pattern is an extended regular expression
+##        (SED- or PERL-style.  Default is Shell-style).
+##
+##   -E   Text search pattern is an extended regular expression
+##        (SED- or PERL-style.  Default is Shell-style).
+##
+##   -f "FileSpec"   Process only <FileSpec>.  Will attempt to process file
+##        even if binary.  For wildcard patterns, use -s.
+##
+##   -F   Force processing of backup files (*,n*), and directories
+##        .backup, .git, and .svn.  Normally these are not processed.
+##        (Can't be used with -b)
+##
+##   -g "N"          List N lines from each match in listing (forward only).
+##
+##   -g "[-]M,N"     List N lines from each match in listing (relative to
+##        line M from matched line).  (Can't be used with -R)
+##
+##   -g "[-]M,N,a"   List N lines from line M (absolute) in file
+##        (negative implies abs. from file end).  (Can't be used with -R)
+##
+##   -G   Global Replace mode.  Replace all matching instances of text pattern
+##        on each line.  -R mode only.
+##
+##   -h   Show this help page.
+##
+##   -i   Ignore case during file search.
+##
+##   -I   Ignore case during text search.
+##
+##   -K "N"   Process only the Nth item found per file.
+##
+##   -l "N"   Levels of directories to process.  Don't descend deeper
+##        than this number (default: no limit)
+##
+##   -n   List line numbers in matches.
+##
+##   -N   List lines NOT matching text search criteria. (Can't be used with -R)
+##
+##   -P "Expr"   Text replace switches (any of {geio}) Use with -R switch only.
+##        Causes the following evaluation: s`{-S "Expr"}`{-R "Expr"`{-P "Expr"}
+##        Assumes that s`TextSearchExpr`TextReplExpr`TextReplSwitches
+##        constitutes a fully-specified perl extended regular search-&-replace
+##        expression.  Any valid perl regex is allowed.
+##
+##   -q   Quiet text mode; only list file names with text matches.
+##        Skips the diff listing.
+##
+##   -Q   Quiet file mode; skip listing file names with text matches.
+##
+##   -R "RepStr"   Search-&-Replace mode.  Replacement string for text matching
+##        RE text search pattern.  Implies the -E switch (search pattern must
+##        be RE).  Args -I, -G, or -P can be used to affect matching rules.
+##        Use $1, $2, etc. as backreferences, if desired.
+##        In "RepStr" any ` must be backslashed as \` (but / does not).
+##
+##   -s "Expr"  File search pattern.  Will attempt to process all files
+##        matching "Expr" even if binary.
+##
+##   -S "Expr"  Text search pattern. ("Expr" as a bare arg implies -S)
+##
+##   -v   Verbose mode shows search matches and replaced lines, if appl.
+##
+##   -V "N"  Turn on debug mode level "N".  N is the bitwise OR of:
+##           1 - ad-hoc debugging
+##           2 - function tracing
+##           4 - built-in debug printing
+##
+##   -w   Search for whole word matches for file name pattern.
+##        (Note: do not use ^ or $ anchors in pattern with this switch).
+##
+##   -W   Search for whole word matches for text search pattern.
+##        (Note: do not use ^ or $ anchors in pattern with this switch).
+##
+##   -x "Expr"  Exclude files/directories matching "Expr".
+##
+##   -z   Ignore settings in $FINDTEXT_ARGS.
+##
+## ENVIRONMENT VARIABLES
+##   $FINDTEXT_ARGS may be used to set arguments to be used every time.
+##   It can be manually overridden with the -z flag.
+##
+## NOTES
+##   Single-quotes around FileSearchExpr, TextSearchExpr, TextReplExpr may be
+##   required if they are not simple alphanumeric text strings.
+##
+## EXAMPLES
+##   1. Find all instances of the string "dogs" in all text files files in
+##      current directory tree.
+##      $ findtext dogs
+##
+##   2. Same as 1. but replace each instance of "dogs" with "cats".
+##      $ findtext dogs -R cats
+##
+##   3. Same as 2. but limit search to file names that end with '*.c'
+##      $ findtext dogs -R cats -s '*.c'
+##
+##   4. Same as 2. but process only the file foo.c
+##      $ findtext dogs -R cats -f foo.c
+##
+##   5. Same as 2. but limit file search depth to current and one subdir down.
+##      $ findtext dogs -R cats -l 2
+##
+##   6. Find all tabs in file foo.c and replace each with two spaces.
+##      $ findtext '\t' -E -R '  ' -f foo.c
+##
+##   7. Find all instances of numbers in the form NNNN.NNN and replace the
+##      first two digits with 55.
+##      $ findtext '\d\d(\d\d\.\d\d\d)' -R '55$1' -P 'g'
+##
+## SEE ALSO
+##   findfile
+##
+## COPYRIGHT
+##   Copyright (c) 1994 - 2018 by David S. "Pat" Patterson
+##
+## AUTHOR
+##   David S. "Pat" Patterson
+##
+
+use strict;
+use warnings;
+
+use Getopt::Std;  # getopt()
+use Cwd;          # cwd ()
+use File::Copy;   # copy(), move()
+
+# Turn on Autoflush:
+#$| = 1;
+
+our %ARG            = ();    # Arg hash table
+our @BARGS          = ();    # Bare arg list
+
+our $g_abs_line_pos = '';    # -g n,m,a -- if 'a' start at absolute position m
+our $g_fname        = '';    # -f filename (minus path) if provided
+our $g_hlc_off      = '';    # highlight color off command (xterm only)
+our $g_hlc_on       = '';    # highlight color on  command (xterm only)
+our $g_lcaret       = '';    # left caret used for printing text content
+our $g_line_count   = '';    # -g n -- count of lines to list from matched line
+our $g_max_levels   = 9999;  # Max levels
+our $g_re           = '';    # final file search regular expression
+our $g_rel_line_pos = '';    # -g n,m -- start at offset m from matched line
+our $g_repl         = '';    # final text replacement pattern
+our $g_shell_args   = 1;     # if true, process $FINDTEXT_ARGS shell variable (if present)
+our $g_sre          = '';    # final text search regular expression
+our $g_srsw         = '';    # global search/replace switches
+our $g_unix         = '';    # Soon to be deprecated
+
+#=========================================================================
+# = function: main
+#
+sub main ()  # 04XX
+{
+    dbg::push (2, "main");
+
+    if ($g_shell_args)
+    {
+        # Pre-concatenate shell $FINDTEXT_ARGS fields to @ARGV:
+
+        if (exists $ENV{'FINDTEXT_ARGS'})
+        {
+            my $a = $ENV{'FINDTEXT_ARGS'}  if (exists $ENV{'FINDTEXT_ARGS'});
+
+            my @a = split (/ +/, $a);
+
+            dbg::print_list (4, "a", \@a);
+
+            push (@a, @ARGV);
+
+            @ARGV = @a;
+        }
+    }
+
+    captureArgs ("abBcCdD:eEf:Fg:GhiIK:l:LnNoP:qQR:s:S:vV:wWx:z");
+
+    # Deal with optional bare arg:
+    if (! $ARG{'S'})
+    {
+        if ($BARGS[0])
+        {
+            $ARG{'S'} = $BARGS[0];
+            splice (@BARGS, 0, 1, ());
+        }
+    }
+
+    dbg::print_list (4, "BARGS l3", \@BARGS);
+    dbg::print_hash (4, "ARG   l3", \%ARG);
+
+    die "unexpected arg '$BARGS[0]'"  if ($BARGS[0]);
+
+
+    # Do initial processing of the argument list:
+    processArgs ();
+
+    dbg::pop (2, "main");
+}
+
+#=========================================================================
+# = function: captureArgs
+#
+# Description:
+#   Capture all arguments from the command line (@ARGV) and place them in %ARG hash.
+#   Initializes all optional args to ''.  Bare arguments are placed in @BARGS list.
+#
+#   All captured bare args are placed in a list in $ARG{'0'}.
+#
+# Usage:
+#   $Options  Command line options token string
+#
+sub captureArgs ($)  # 08XX
+{
+    my ($Options) = @_;
+
+    dbg::push (2, "captureArgs");
+
+    dbg::print_list (4, "ARGV l1", \@ARGV);
+    dbg::print_hash (4, "ARG  l1", \%ARG);
+
+    # Initialize all options in %ARG:
+    my @opts = split (//, $Options);
+
+    for my $opt (@opts)
+    {
+        $ARG{$opt} = ''  if ($opt =~ /\w/);
+    }
+
+    do
+    {
+        # Parse the argument list and place the information into a global $g_ARGV_Hash:
+        getopts ($Options, \%ARG);
+
+        # Capture any remaining args as Bare Args (BARGS):
+        if ($ARGV[0])
+        {
+            push (@BARGS, $ARGV[0]);
+            splice (@ARGV, 0, 1, ());
+        }
+    } while ($ARGV[0]);
+
+    # Special Handling for -R to properly handle -R '':
+    if ($g_repl)
+    {
+        $g_repl = $ARG{'R'};  # holds replacement pattern
+        $ARG{'R'} = 1;        # used as flag
+    }
+
+    dbg::print_list (4, "ARGV  l2", \@ARGV);
+    dbg::print_hash (4, "ARG   l2", \%ARG);
+    dbg::print_list (4, "BARGS l2", \@BARGS);
+
+    dbg::pop (2, "captureArgs");
+}
+
+#=========================================================================
+# = function: processArgs
+#
+# Description:
+#   Perform all initial processing on captured command line arguments.
+#   Call mainLoop().
+#
+sub processArgs ()  # 12XX
+{
+    dbg::push (2, "processArgs");
+
+
+    # If OS is Unix-like, set to 1; for Windows, set to 0.
+    $g_unix = (defined ($ENV{'OS'})  &&  ($ENV{'OS'} =~ /Windows/)  ?  0  :  1);
+
+    dbg::log (4, "UNIX=$g_unix");
+
+
+    # Check usage combos, provide help with command line arguments:
+    usage ()  if ($ARG{'h'});
+
+    if ($ARG{'R'})
+    {
+        $ARG{'E'} = 1;  # -R implies -E
+    }
+
+    if (($ARG{'e'}  ||  $ARG{'l'}  ||  $ARG{'s'})  &&  $ARG{'f'})
+    {
+        die "Error: -e, -l or -s cannot be used with -f.";
+    }
+
+    if ($ARG{'b'}  &&  $ARG{'F'})
+    {
+        die "Error: -b cannot be used with -F.";
+    }
+
+    if ($ARG{'l'} &&  $ARG{'l'} < 1)
+    {
+        die "Error: -l <N>: N must be 1 or greater";
+    }
+
+    if (($ARG{'I'}  ||  $ARG{'G'})  &&  $ARG{'P'})
+    {
+        die "Error: -I, -G cannot be used with -P (add 'i' or 'g' to -P <arg>).";
+    }
+
+    if ($ARG{'q'}  &&  $ARG{'Q'})
+    {
+        die "Error: -q cannot be used with -Q.";
+    }
+
+    if ($ARG{'g'}  &&  $ARG{'g'} =~ /,/  &&  $ARG{'R'})
+    {
+        die "Error: -g <m,n> cannot be used with -R.";
+    }
+
+    if (($ARG{'N'}  ||  $ARG{'W'})  &&  $ARG{'R'})
+    {
+        die "Error: -N, -W cannot be used with -R.";
+    }
+
+    if (($ARG{'b'}  ||  $ARG{'c'}  ||  $ARG{'P'})  &&  ! $ARG{'R'})
+    {
+        die "Error: -b, -c, -P are only valid with -R.";
+    }
+
+    # Populate misc global variables:
+
+    # Set max level if specified:
+    $g_max_levels = $ARG{'l'}  if ($ARG{'l'} ne '');
+
+
+    #------------------------------------------------------------------------------
+    # Set up file search string:
+
+    $g_re = $ARG{'s'};
+
+    if ($g_re eq '') # Default case is to process all text files:
+    {
+        $g_re     = '.+';
+        $ARG{'e'} = 1;
+    }
+
+    if ($ARG{'e'})   # sed style
+    {
+        if ($ARG{'w'})
+        {
+            # Make expression valid for whole words only:
+            $g_re = '(^|[\W_])' . $g_re . '($|[\W_])';
+        }
+
+        dbg::log (4, "ERE file RE=/$g_re/$ARG{'i'}");
+    }
+    else      # shell style
+    {
+        # Place a \ in front of all non-alpha chars:
+        $g_re =~ s/(\W)/\\$1/g;
+
+        # Convert shell wildcards to ERE wildcards:
+        $g_re =~ s/\\([*?+])/.$1/g;
+
+        $g_re = '^' . $g_re . "\$";
+
+        dbg::log (4, "Shell file RE=/$g_re/$ARG{'i'}");
+    }
+
+    study $g_re;
+
+    study $ARG{'x'}  if ($ARG{'x'} ne '');
+
+    #------------------------------------------------------------------------------
+    # Set up text search string:
+
+    if ($ARG{'P'})
+    {
+        $g_srsw = $ARG{'P'};
+    }
+    else
+    {
+        if ($ARG{'G'})
+        {
+            $g_srsw .= 'g';
+        }
+
+        if ($ARG{'I'})
+        {
+            $g_srsw .= 'i';
+        }
+    }
+
+    $g_sre = $ARG{'S'};
+
+    if (! $g_sre) # Default case is to show all text in files:
+    {
+        $g_sre    = '.*';
+        $ARG{'E'} = 1;
+    }
+
+    if ($ARG{'R'})  # S&R ere style
+    {
+        dbg::log (4, "ERE text SRE=s/$g_sre/$g_srsw\n");
+    }
+    elsif ($ARG{'E'})  # ere style
+    {
+        dbg::log (4, "ERE text RE=/$g_sre/$g_srsw\n");
+    }
+    else  # shell style
+    {
+        # Place a \ in front of all non-alpha chars:
+        $g_sre =~ s/(\W)/\\$1/g;
+
+        # Convert shell wildcards to ERE wildcards:
+        $g_sre =~ s/\\([*?+])/.$1/g;
+
+        dbg::log (4, "Shell text RE=/$g_sre/$g_srsw\n");
+    }
+
+    if ($ARG{'W'})
+    {
+        # Make expression valid for whole words only:
+        $g_sre = '(^|\W)' . $g_sre . '($|\W)';
+    }
+
+    study $g_sre;
+
+    #------------------------------------------------------------------------------
+    # If verbose, show file and text search patterns:
+
+    if ($ARG{'v'})
+    {
+        if ($ARG{'f'} ne '')
+        {
+            print "File     = $ARG{'f'}\n";
+        }
+        else
+        {
+            print "File ERE = /$g_re/$ARG{'i'}\n";
+        }
+
+        if ($ARG{'R'})
+        {
+            print "Text ERE = s/$g_sre/$g_repl/$g_srsw\n";
+        }
+        else
+        {
+            print "Text ERE = /$g_sre/$g_srsw\n";
+        }
+    }
+
+    # ARG{'B'} set means 'bare mode' or "print matching lines without left caret"
+    $g_lcaret = ($ARG{'B'}  ?  ''  :  '< ');
+
+
+    if ($ARG{'g'} ne '')
+    {
+        if ($ARG{'g'} =~ /,/)
+        {
+            # -g -1,1   --list previous line
+            ($g_rel_line_pos, $g_line_count, $g_abs_line_pos) = split (/,/, $ARG{'g'});
+        }
+        else
+        {
+            $g_line_count = $ARG{'g'};
+        }
+    }
+
+
+    processDir (1, '', '.');
+
+    dbg::pop (2, "processArgs");
+}
+
+#=========================================================================
+
+# Main Processing Loop:
+#   $cur_level    - Current relative directory depth.  1 = starting directory
+#   $cur_rel_path - Current relative path from starting directory
+#   $cur_dir      - Name of directory in the parent's path to be processed
+#
+sub processDir ()  #16XX
+{
+    my ($cur_level, $cur_rel_path, $cur_dir) = @_;
+
+    dbg::push (2, "processDir");
+
+    dbg::log (4, "cur_level=$cur_level cur_rel_path='$cur_rel_path' cur_dir='$cur_dir'");
+
+    if (chdir ($cur_dir))
+    {
+        my @dirlist;   # contents of the current directory
+        my @dirlist0;  # contents of teh current directory (before sorting)
+
+        if ($ARG{'f'})  # Process single file:
+        {
+            push (@dirlist, $ARG{'f'});
+
+            $g_max_levels = 1;
+        }
+        else            # Process entire directory:
+        {
+            opendir (DIR, ".");
+
+            if ($ARG{'a'})  # alphabetize (sort) file names first
+            {
+                @dirlist0 = readdir (DIR);
+
+                @dirlist  = sort @dirlist0;
+            }
+            else
+            {
+                @dirlist  = readdir (DIR);
+            }
+
+            dbg::print_list (1, 'dirlist', \@dirlist);
+
+            closedir (DIR);
+        }
+
+        #------------------------------------
+        # Non-directory File Processing Loop:
+        #------------------------------------
+
+        foreach my $fn (@dirlist) # first print files:
+        {
+            if (! -d $fn)
+            {
+                # Check for filename match:
+                if ($ARG{'f'}  ||  $ARG{'i'}  ?  $fn =~ /$g_re/i  :  $fn =~ /$g_re/)
+                {
+                    # Process file if (it is explicitly named, or
+                    # (the "force backup file processing" flag is set or the file is not a backup file) -and-
+                    # (the "exclude certain file patterns" flag has not been set or the file does not match it))
+                    # and the file is a text file:
+                    #
+                    if (($ARG{'f'}  ||  ($ARG{'F'}  ||  $fn !~ /,\d+/)  &&  (! $ARG{'x'}  ||  $fn !~ /$ARG{'x'}/))  &&  -T $fn)
+                    {
+                        my $fspec            = ("$cur_rel_path$cur_dir" eq '.'  ?  "$fn"  :  "$cur_rel_path$cur_dir/$fn");
+
+                        dbg::log (4, "[$cur_rel_path$cur_dir] fspec=$fspec");
+
+                        my $cf               = 0;
+                        my $filename_printed = 0;    # Set to 1 the first time a file's text matched the $sre pattern and we print the file's name
+                        my $fbkp             = '';   # backup filename (if -R given)
+                        my $ftmp             = '';   # temp   filename (if -R given)
+
+                        if ($ARG{'R'})
+                        {
+                            # if -R option given, check for writeability and generate a backup filename:
+                            if (! -w $fn)
+                            {
+                                print "$fn not writeable.  Skipping;\n\n";
+
+                                next;
+                            }
+
+                            if (! $ARG{'d'})
+                            {
+                                # Generate the backup file name:
+                                $fbkp = Backup_file ($fn, '', 0, 1);
+                                $ftmp  = $fbkp . ".tmp";
+
+                                # Now that we have the name for $ftmp, we will write our output to it:
+                                open (FO1, ">$ftmp")  or  die "Error: Cannot open $ftmp for writing.  Exiting.\n\n";
+                            }
+                        }
+
+                        if ($ARG{'v'})
+                        {
+                            print "$fspec\n";
+
+                            $filename_printed = 1;
+                        }
+
+                        my $line_matched       = 0;  # 1 if current line matches -s SRE pattern.
+                        my $line_match_count   = 0;  # count of line matches in the current file.
+                        my $line_changed_count = 0;  # count of lines actually changed by -R operation.
+
+                        # All string search/replace processing is done from the original $fn to the temp copy $ftmp:
+                        if (open (FI1, "./$fn"))
+                        {
+                            $/ = $ARG{'D'}  if ($ARG{'D'});  # Alternate input record separator?
+
+                            my $line            = 0;
+                            my $line_count      = 0;
+                            my $lno             = '';
+                            my $out             = '';
+
+                            my @file_line_list  = ();
+                            my %match_line_hash = ();
+
+                            # -------------------
+                            # File Contents Loop:
+                            # -------------------
+                            while (<FI1>)
+                            {
+                                $line++;
+
+                                if ($g_rel_line_pos ne '')
+                                {
+                                    # If user specifies search results by relative line position,
+                                    # record entire file in @file_line_list
+                                    push (@file_line_list, $_);
+
+                                    next  if ($g_abs_line_pos);
+                                }
+
+                                $line_matched = 0;
+
+                                # Check for a text match on the current line:
+                                if ($ARG{'I'}  ?  m`$g_sre`io  :  m`$g_sre`o)
+                                {
+                                    # * * Found a text pattern match on this line * *
+
+                                    # With -K switch, only the Kth match instance is the actual match:
+                                    $line_match_count++;
+
+                                    if (! $ARG{'K'}  ||  $line_match_count == $ARG{'K'})
+                                    {
+                                        $line_matched = 1;
+
+                                        if ($g_rel_line_pos ne '')
+                                        {
+                                            # Don't set $line_matched here; we will output the matched
+                                            # file lines independently once it has been fully
+                                            # read.
+                                            #
+                                            my $start = $line + $g_rel_line_pos - 1;
+
+                                            my $end   = $start + $g_line_count - 1;
+
+                                            for (my $i = $start;  $i <= $end;  ++$i)
+                                            {
+                                                $match_line_hash {$i} = 1;
+                                            }
+                                        }
+                                        else
+                                        {
+                                            $line_matched = 1;
+
+                                            $line_count = $g_line_count;
+                                        }
+                                    }
+                                }
+
+                                if ($line_matched)
+                                {
+                                    $line_count--  if ($line_count);
+
+                                    if (! $filename_printed  &&  ! $ARG{'Q'})
+                                    {
+                                        print "$fspec\n";
+
+                                        $filename_printed = 1;
+                                    }
+
+                                    if (! $ARG{'q'})
+                                    {
+                                        if ($ARG{'n'})
+                                        {
+                                            $lno = sprintf ("%5.d ", $line);
+                                        }
+
+                                        $out = "$lno$g_lcaret$_";
+                                        chomp $out;
+                                        print "$out\n";
+                                    }
+
+                                    if ($ARG{'R'})
+                                    {
+                                        my $orig_line = $_;
+
+                                        dbg::log (4, "SRE='$g_sre' REPL='$g_repl' SWITCHES='$g_srsw'\n");
+
+                                        # (We use backticks for SRE separator markers)
+                                        my $eval_expr = "s`$g_sre`$g_repl`$g_srsw";
+
+                                        dbg::log (4, "eval ($eval_expr)\n)");
+
+                                        # Must use eval() to properly handle capture groups.
+                                        eval ($eval_expr);
+
+                                        if ($_ ne $orig_line)
+                                        {
+                                            $line_changed_count++;
+
+                                            if (! $ARG{'q'})
+                                            {
+                                                print "> $_";
+                                            }
+                                        }
+
+                                        if ($ARG{'c'}  &&  ! $cf)
+                                        {
+                                            print "Confirm: ([y]/n/f/a) ";
+
+                                            my $ans = <STDIN>; chop $ans;
+
+                                            if ($ans =~ /^[Nn]/)
+                                            {
+                                                print "Line not changed.\n\n";
+
+                                                $_ = $orig_line;
+
+                                                $line_matched = 0;
+                                            }
+                                            elsif ($ans =~ /^[Ff]/) # No further confirms this file.
+                                            {
+                                                $cf = 1;
+                                            }
+                                            elsif ($ans =~ /^[Aa]/) # No further confirms required.
+                                            {
+                                                $ARG{'c'} = 0;
+                                            }
+                                            else
+                                            {
+                                                print "\n";
+                                            }
+                                        }
+                                    }
+                                }
+
+
+                                if ($ARG{'R'}  &&  ! $ARG{'d'})
+                                {
+                                    print FO1 $_;
+
+                                    if ($g_rel_line_pos ne '')
+                                    {
+                                        $file_line_list[$line - 1] = $_;
+                                    }
+                                }
+                            }  # -- End of File Contents Loop --
+
+                            $/ = "\n"  if ($ARG{'D'});
+
+                            close FI1;
+
+
+                            # Special file line output routine for searches
+                            # that specify relative line positions.
+                            #
+                            if ($g_rel_line_pos ne ''  &&  ($line_matched  ||  $g_abs_line_pos))
+                            {
+                                my $n = @file_line_list;
+
+                                for (my $i = 0;  $i < $n;  ++$i)
+                                {
+                                    if ($g_abs_line_pos)
+                                    {
+                                        $line_matched = 0;
+
+                                        if ($g_rel_line_pos >= 0)
+                                        {
+                                            # Absolute line in file:
+                                            #
+                                            if ($i >= $g_rel_line_pos - 1  &&
+                                                $i <  $g_rel_line_pos + $g_line_count - 1)
+                                            {
+                                                $line_matched = 1;
+                                            }
+                                        }
+                                        else  # Absolute line from end of file:
+                                        {
+                                            if ($i >= $n + $g_rel_line_pos  &&
+                                                $i <= $n + $g_rel_line_pos + $g_line_count - 1)
+                                            {
+                                                $line_matched = 1;
+                                            }
+                                        }
+                                    }
+                                    else
+                                    {
+                                        $line_matched = ($match_line_hash{$i} == 1);
+                                    }
+
+                                    $line_matched = 1 - $line_matched  if ($ARG{'N'});
+
+                                    if ($line_matched)
+                                    {
+                                        if (! $filename_printed  &&  ! $ARG{'Q'})
+                                        {
+                                            print "$fspec\n";
+
+                                            $filename_printed = 1;
+                                        }
+
+                                        if (! $ARG{'q'})
+                                        {
+                                            $out = "?$g_lcaret$file_line_list[$i]";
+                                            chomp $out;
+                                            print $out . "!\n";
+                                        }
+                                    }
+                                }
+                            }
+
+
+                            if ($ARG{'R'}  &&  ! $ARG{'d'})
+                            {
+                                close FO1;
+
+                                if ($line_changed_count)  # $ftmp differs from $fn
+                                {
+                                    print "- file '$fn' was modified.  $line_changed_count lines changed.\n"  if ($ARG{'v'});
+
+                                    my $tmp = "$ftmp.tmp";
+
+                                    # Move original to backup, new file to original:
+                                    if ($g_unix)
+                                    {
+                                        system ("mv \"$fn\" \"$fbkp\"")  if ($ARG{'b'}); # move original to backup
+                                        system ("mv \"$ftmp\" \"$fn\""); # move new file from temp to original name
+                                    }
+                                    else
+                                    {
+                                        system ("move \"$fn\" \"$fbkp\"")  if ($ARG{'b'}); # move original to backup
+                                        system ("move \"$ftmp\" \"$fn\""); # move new file from temp to original name
+                                    }
+                                }
+                                else  # new file contains no changes
+                                {
+                                    print "- file '$fn' was not modified.\n"  if ($ARG{'v'});
+
+                                    if ($g_unix)
+                                    {
+                                        system ("rm -f \"$ftmp\""); # delete the new file
+                                    }
+                                    else
+                                    {
+                                        system ("del /F \"$ftmp\""); # delete the new file
+                                    }
+                                }
+                            }
+                        }
+                        else
+                        {
+                            print "Error: cannot open file $fn for reading in directory $cur_rel_path$cur_dir";
+                        }
+
+                        # Print final file-separation linefeed unless -q or -Q was given:
+                        if ($line_match_count  &&  ! $ARG{'q'}  &&  ! $ARG{'Q'})
+                        {
+                            print "\n";
+                        }
+                    }
+                    else
+                    {
+                        if ($ARG{'v'})
+                        {
+                            print ("File '$fn' is excluded;\n");
+                        }
+                    }
+                }
+            }
+        }
+        # -- End of File Processing Loop --
+
+        #---------------------------
+        # Directory Processing Loop:
+        #---------------------------
+
+        foreach my $fdn (@dirlist)
+        {
+            if (-d $fdn  &&  ($fdn !~ /^\.{1,2}$/))
+            {
+                if (($ARG{'F'}  ||  $fdn !~ /(,\d+|^\.backup$|^\.svn$|^\.git$)/)  &&  (! $ARG{'x'}  ||  $fdn !~ /$ARG{'x'}/))
+                {
+                    my $ad_suffix = (-x $fdn  ?  ''  :  '  (Access denied)');
+
+                    if ($ARG{'v'})  # case where we always want to print the dir:
+                    {
+                        my $ln_suffix = (-l $fdn  ?  '@'  :  '');
+
+                        print "$cur_rel_path$cur_dir/$fdn$ln_suffix$ad_suffix\n"
+                    }
+
+                    # This is where we decide whether to descend into the current dir:
+                    # We do if: - we haven't exceeded the max level, and
+                    #           - the directory allows us access
+
+                    if ($cur_level < $g_max_levels  &&  ! $ad_suffix)
+                    {
+                        &processDir ($cur_level + 1, "$cur_rel_path$cur_dir/", $fdn);
+                    }
+                }
+                else
+                {
+                    if ($ARG{'v'})
+                    {
+                        print ("Directory '$fdn' is excluded;\n");
+                    }
+                }
+            }
+        }
+
+        chdir ('..');
+    }
+    else
+    {
+        print "Error: Couldn't cd to $cur_dir!!!\n";
+    }
+
+    dbg::pop (2, "processDir");
+}
+
+#=========================================================================
+
+# ############################################################################
+#
+#   Sub Name:    Backup_file
+#
+#   Description: Looks for all versions of file name from $FileSpec
+#                in $BackupLoc.  Makes a backup of file as follows:
+#                Program copies filename to filename,# where # is next highest
+#                backup number in sequence.  File name cannot be
+#                a wild card.
+#
+#   Arguments:   NAME         DESCRIPTION
+#                $FileSpec    Fully specified file to backup
+#                $BackupLoc   Directory to place backup copy, e.g:
+#                             "./.backup" - for ./backup directory.
+#                             ""          - for same directory.
+#                $Notify      0 - No backup message
+#                             n - (n != 0) print backup message
+#                $NoCreate    1 - Do not create a backup file.
+#   Globals:     $g_unix
+#
+#   Returns:     $backup_file                 Name of backup file, -or-
+#                <aborts>                     Failure
+#
+# ############################################################################
+
+sub Backup_file ($$$$)
+{
+    dbg::push (2, "Backup_file");
+
+    my ($FileSpec, $BackupLoc, $Notify, $NoCreate) = @_;
+
+    # dbg::log ("FileSpec='$FileSpec', BackupLoc='$BackupLoc', Notify='$Notify', NoCreate='$NoCreate'\n");
+
+    my $bkp_spec;       # file name to search for in backup dir.
+    my $file_name;      # Name of file (no dir path)
+    my $file_name_rx;   # Name of file converted to a perl search string
+    my $high_vn;        # Highest version not found so far
+    my $high_fn;        # FN of highest version no found so far
+    my $latest_bkp_vn;  # Computed new version no for backup
+    my $latest_bkp_fn;  # Fully specified new backup file name
+    my $this_file_vn;   # Current file version number
+    my @file;
+
+    if (@_ != 4)
+    {
+        die "Error: sub Backup_file argc error!\n";
+    }
+
+
+    if (-l $FileSpec)
+    {
+        # handle softlinks by backing up file link is connected to:
+        #
+        my $tmp = `ls -l $FileSpec`;
+
+        ($FileSpec) = ($tmp =~ /-> (.+)$/);
+    }
+
+    # Extract the file name from the file spec:
+    #
+    ($file_name) = ($FileSpec =~ /([^\/]+)$/);
+
+    # Create a regular expression version of the file name:
+    #
+    $file_name_rx = $file_name;
+
+    $file_name_rx =~ s/([\W])/\\$1/g;
+
+    if ($BackupLoc)
+    {
+        $bkp_spec = "$BackupLoc/$file_name";
+    }
+    else
+    {
+        $bkp_spec = "$FileSpec";
+    }
+
+
+    $high_vn = -1;
+    $high_fn = $FileSpec . "_" . $$;
+
+    # Create a list of all files matching the filespec in the
+    # backup directory:
+    #
+    if ($g_unix)
+    {
+        @file = `ls -d '$bkp_spec'* 2>/dev/null`;
+    }
+    else
+    {
+        @file = `dir $bkp_spec* /B`;
+    }
+
+    foreach (@file)
+    {
+        my $curfile = $_;
+
+        if ($g_unix)
+        {
+            chop $curfile;
+        }
+
+        # Determine the version number of this file (-1 if none):
+        #
+        ($this_file_vn) = ($curfile =~ /$file_name_rx,(\d+)$/);
+
+        $this_file_vn = ''  if (! defined ($this_file_vn));
+
+        $this_file_vn = (length ($this_file_vn)  ?  $this_file_vn  :  -1);
+
+        if ($this_file_vn > $high_vn)
+        {
+            $high_vn = $this_file_vn;
+            $high_fn = $curfile;
+        }
+    }
+
+    $latest_bkp_vn = $high_vn + 1;
+
+    $latest_bkp_fn = "$bkp_spec,$latest_bkp_vn";
+
+    if ($g_unix)
+    {
+        if (-d $FileSpec)
+        {
+            $? = 1;
+        }
+        else
+        {
+            # Compare current version with last backed-up version:
+            #
+            system ("cmp -s '$FileSpec' '$high_fn'");
+        }
+    }
+    else
+    {
+        $? = 1;
+    }
+
+    if ($? || "$FileSpec" eq "$high_fn")
+    {
+        my $err = '';
+
+        if (-e $FileSpec)
+        {
+            my $r_flag = '';
+            my $d_flag = '';
+
+            if (-d $FileSpec)
+            {
+                $r_flag = "/E /H"; # If file is a directory, back it up recursively
+
+                $d_flag = "directory ";
+
+                die "Unexpected use of -d mode in bkp () -- look at code!"
+            }
+
+            if ($Notify)
+            {
+                print "Backing up $d_flag$FileSpec to $latest_bkp_fn.\n";
+            }
+
+            unless ($NoCreate)
+            {
+                if ($g_unix)
+                {
+                    $err = system ("cp -p $r_flag \"$FileSpec\" \"$latest_bkp_fn\"");
+                }
+                else
+                {
+                    $err = system ("copy \"$FileSpec\" \"$latest_bkp_fn\"");
+                }
+            }
+        }
+        else # File doesn't exist so just touch backup file.
+        {
+            if (-z $high_fn)
+            {
+                warn "$FileSpec does not exist.  Backup file $latest_bkp_fn is empty.\n";
+            }
+        }
+
+        if ($err)
+        {
+            warn "\nPROBLEM: Can't copy $FileSpec to $latest_bkp_fn\n";
+            die  "Exiting.\n\n";
+        }
+    }
+    else # Don't back up if last backup file is identical:
+    {
+        if ($Notify)
+        {
+            print "Identical file $high_fn already exists.\n";
+        }
+
+        $latest_bkp_fn = $high_fn;
+    }
+
+    dbg::pop (2,"Backup_file");
+
+    return $latest_bkp_fn;
+}
+
+#=========================================================================
+# = function: usage
+#
+sub usage ($)  # 52XX
+{
+    dbg::push (2, "usage");
+
+    my ($Msg) = @_;
+
+    print ("$Msg\n\n")  if ($Msg);
+
+    open (SELF, $0);
+
+    while (<SELF>)
+    {
+        print if (/^##/);
+    }
+
+    dbg::pop (2, "usage");
+
+    exit (0);
+}
+
+#=========================================================================
+# Class Dbglog
+#
+# This class handles indented debug logging for single-threaded programs.
+# Note: the debug level checking is "bitwise-or style".
+# 1 - ad-hoc debugging
+# 2 - function tracing
+# 4 - built-in debug printing
+#
+package dbg;
+{
+    our $debug    = 0;
+
+    my $cs_level  = 0;  # this is the call stack level, which increases by 1 for each call.
+    my @cs_name   = ();
+    my $cs_indent = "";
+
+    sub push ($$;$)
+    {
+        my ($dbg, $name, $param_text) = @_;
+
+        return unless ($dbg & $debug);
+
+        $param_text = ''  unless (defined ($param_text));
+
+        push (@cs_name, $name);
+
+        $cs_level += 1;
+
+        print $cs_indent . ">" . $name . "($param_text)\n";
+
+        $cs_indent .= "| ";
+    }
+
+    sub pop ($$;$)
+    {
+        my ($dbg, $name, $ret_val) = @_;
+
+        return unless ($dbg & $debug);
+
+        $cs_level -= 1;
+
+        my $pushed_name = pop (@cs_name);
+
+        my $msg = "";
+
+        if ($name ne $pushed_name)
+        {
+            $msg = " dbg::pop() Error: expected $name but got $pushed_name";
+        }
+        elsif (defined ($ret_val))
+        {
+            $msg = " return '$ret_val'"
+        }
+
+        $cs_indent = substr ($cs_indent, 2);
+
+        print $cs_indent . "<" . $pushed_name . "()" . $msg . "\n";
+    }
+
+    sub log ($$)
+    {
+        my ($dbg, $dbg_text) = @_;
+
+        return unless ($dbg & $debug);
+
+        print $cs_indent . $dbg_text . "\n";
+    }
+
+    #=========================================================================
+    # Function:   print_hash
+    #
+    # Description:
+    #    Print out the contents of a hash table in key sorted order
+    #    Associative Array must be passed in via the * prefix, not %.
+    #
+    # Usage:
+    #    $dbg      Debug level required to print
+    #    $Name     Printable name for the hash table.
+    #    $HTRef    Reference to the hash table.  (e.g. \%hashtable)
+    #    $Chop     1 to chop $value before printing
+    #    $VSort    1 to sort by value (not key) (No nested tables)
+    #    $Indent   Nbr of spaces to indent table
+    #    $Type     '@' if value is an ArrayRef, '%' if value is a HashRef.
+    #              '=' is hybrid table in which all elements are ArrayRefs
+    #                  except the element for key '=', which is a HashRef.
+    #
+    # Return Values:
+    #    None.
+    sub print_hash
+    {
+        my ($dbg, $Name, $HTRef, $Chop, $VSort, $Indent, $Type) = @_;
+
+        return unless ($dbg & $debug);
+
+        $Chop   = ''  unless defined ($Chop);
+        $VSort  = ''  unless defined ($VSort);
+        $Indent = 2   unless defined ($Indent);
+        $Type   = ''  unless defined ($Type);
+
+        my ($key, $value, %htt, $list);
+
+        dbg::log ($dbg, "HT %$Name:");
+
+        if ($VSort)
+        {
+            foreach $key (keys (%$HTRef))
+            {
+                $value = $$HTRef{$key};
+                $htt{$value} = $key;
+            }
+
+            foreach $key (sort (keys (%htt)))
+            {
+                $value = $htt{$key};
+                chomp ($value)  if ($Chop);
+                dbg::log ($dbg, ' ' x $Indent . "'$key' => '$value'");
+            }
+        }
+        else
+        {
+            foreach $key (sort (keys (%$HTRef)))
+            {
+                $value = $$HTRef{$key};
+
+                if ($Type eq '@'  or  ($Type eq '='  and  $key ne '='))
+                {
+                    dbg::log ($dbg, ' ' x $Indent . "'$key' => ");
+                    print_list ($dbg, $value, 0, 0, $Indent + 2);
+                }
+                elsif ($Type eq '%'  or  ($Type eq '='  and  $key eq '='))
+                {
+                    dbg::log ($dbg, ' ' x $Indent . "'$key' => ");
+                    print_hash ($dbg, "", $value, 0, 0, $Indent + 2);
+                }
+                else
+                {
+                    chomp ($value)  if ($Chop);
+                    dbg::log ($dbg, ' ' x $Indent . "'$key' => '$value'");
+                }
+            }
+        }
+    }
+
+    #=========================================================================
+    # Function:   print_list
+    #
+    # Description:
+    #    Print out the contents of a list optionally in sorted order.
+    #    List/Array must be passed in via the * prefix, not @.
+    #
+    #  Usage:
+    #    $dbg      Debug level required to print
+    #    $Name     Printable name for the hash table.
+    #    $ListRef  Reference to a list.  (e.g. \@list)
+    #    $Chop     1 to chop $value before printing.
+    #    $Sort     1 to sort list.
+    #    $Indent   Nbr of spaces to indent table
+    #    $Type     '@' if value is an Array, '%' if value is a Hash.
+    #
+    # Return Values:
+    #    None.
+    sub print_list
+    {
+        my ($dbg, $Name, $ListRef, $Chop, $Sort, $Indent, $Type) = @_;
+
+        return unless ($dbg & $debug);
+
+        my ($value, $i);
+
+        $Chop   = ''  unless defined ($Chop);
+        $Sort   = ''  unless defined ($Sort);
+        $Indent = 2   unless defined ($Indent);
+        $Type   = ''  unless defined ($Type);
+
+        dbg::log ($dbg, "List \@$Name:");
+
+        if ($Sort)
+        {
+            foreach $value (sort (@$ListRef))
+            {
+                chomp  if ($Chop);
+                dbg::log ($dbg, ' ' x $Indent . "'$value'");
+            }
+        }
+        else
+        {
+            $i = 0;  # Array index
+            foreach $value (@$ListRef)
+            {
+                if ($Type eq '@')
+                {
+                    dbg::log ($dbg, ' ' x $Indent . "[$i] =");
+                    print_list ($dbg, $value, 0, 0, $Indent + 2);
+                }
+                elsif ($Type eq '%')
+                {
+                    dbg::log ($dbg, ' ' x $Indent . "[$i] =");
+                    print_hash ($dbg, "", $value, 0, 0, $Indent + 2);
+                }
+                else
+                {
+                    chomp ($value)  if ($Chop);
+                    dbg::log ($dbg, ' ' x $Indent . "[$i] = '$value'");
+                }
+
+                $i++;
+            }
+        }
+    }
+} # end package dbg
+
+#=========================================================================
+#=========================================================================
+
+# Check arg list for special flags:
+for my $arg (@ARGV)
+{
+    $dbg::debug   = ($arg =~ /^\d$/  ?  $arg  :  -2)  if ($dbg::debug == -1);
+
+    $dbg::debug   = -1  if ($arg eq '-V');
+
+    $g_shell_args =  0  if ($arg eq '-z');
+
+    $g_repl       =  1  if ($arg eq '-R');  # in the event -R '' given
+}
+
+die "Error: -V requires a numeric argument"  if ($dbg::debug < 0);
+
+# Run program:
+::main ();
+
+#=========================================================================
+#=========================================================================
+
+__END__
+

@@ -1,0 +1,256 @@
+#!/usr/bin/env perl
+
+## goto
+##
+## V 1.0  2012-10-01   Original version (Ruby)
+## V 1.1  2014-06-15   Ported to Perl
+## V 1.2  2014-09-25   Improve error messaging for bad .gotorc entries
+## V 1.3  2014-10-16   Allow comma or space delimiter, ~ for $HOME
+## V 1.4  2014-11-21   Make it work with Windows paths containing spaces
+## V 1.5  2014-12-19   Bug fix windows paths; add -h option
+## V 1.6  2015-10-07   Allow partial front-match on directories in cwd
+##
+## Purpose of program: change directory to various locations in
+## the file tree using short abbreviations, e.g.
+##
+## $ go prj
+##
+## Requires a file called .gotorc in the user's home directory
+## that contains a csv list of abbreviations paired with full paths.
+##
+## Supports an optional environment variable $DEV which can be used in
+## in .gotorc path specs.  If defined, any subdirectories in the $DEV
+## directory can be used as arguments to 'go' without making explicit
+## entries for them in the .gotorc file.
+##
+## Author: David S. "Pat" Patterson
+##
+##
+## This section goes in .bashrc
+##
+## go ()
+## {
+##   if [[ "$1" == '' ]]
+##   then
+##     cat ~/.gotorc
+##   else
+##     # invokes the 'goto' script - should be in your $PATH
+##     Result=`goto $*`
+##     if [[ "$Result" =~ ERROR.* ]]
+##     then
+##       echo $Result
+##     else
+##       # works for windows paths also
+##       CMD=`eval "echo $Result"`
+##       echo "cd \"$CMD\""
+##       cd "$CMD"
+##     fi
+##   fi
+## }
+##
+## g ()
+## {
+##   go $*
+## }
+
+
+$DEBUG = 0;
+
+sub main ()
+{
+    $dev_src_path = (exists ($ENV{'DEV'}) ? $ENV{'DEV'} : '');
+
+    if ($dev_src_path.length > 0  &&  $dev_src_path !~ /\/$/)
+    {
+        $dev_src_path = $dev_src_path + '/';
+
+        if (! -e $dev_src_path)
+        {
+            $dev_src_path = '';
+        }
+    }
+
+    our $ARGC = scalar (@ARGV);
+
+    if ($ARGC < 1)
+    {
+        die ("A key arg matching one in ~/.gotorc is required");
+
+    }
+    elsif ($ARGV[0] =~ /^-{1,2}h/)
+    {
+        usage ();
+    }
+
+
+    my $key_name = $ARGV[0];
+
+    $key_name =~ s/\/$//;  # remove trailing / if any
+
+
+    my $found_val = '';
+
+    my %goto_hash = {};
+
+    my $lno = 0;
+
+    my $home = $ENV{'HOME'};
+
+    my $status = open (FI1, "$home/.gotorc");
+
+    while (<FI1>)
+    {
+        $lno++;
+
+        my $line = $_;
+
+        $line =~ s/#.*//;
+        $line =~ s/^\s+//;
+        $line =~ s/\s+$//;
+        $line =~ s/~/$home/;
+
+        # Process .gotorc line if not a comment line:
+        #
+        if (length ($line) > 0  &&  $line !~ /^\s*#/)
+        {
+            print "line: '$line'\n"  if ($DEBUG);
+
+            @line_data = ($line =~ /^([^,\s]+)[,"\s]+(\S[^"]*)/);
+
+            print "line_data[0]: '$line_data[0]'\n"  if ($DEBUG);
+            print "line_data[1]: '$line_data[1]'\n"  if ($DEBUG);
+
+            if (scalar (@line_data) == 2)
+            {
+                if (exists ($goto_hash{$line_data[0]}))
+                {
+                    print "ERROR: Found duplicate key entry for '$line_data[0]' in .gotorc line $lno\n";
+
+                    exit;
+                }
+                else
+                {
+                    $goto_hash{$line_data[0]} = $line_data[1];
+                }
+            }
+            elsif (scalar (@line_data) == 1)
+            {
+                print "ERROR: missing separator [space or comma] in .gotorc line $lno\n";
+                exit;
+            }
+            else
+            {
+                print "ERROR: bad format '$line' in .gotorc line $lno\n";
+                exit;
+            }
+
+        }
+    }
+
+
+    # Check .gotorc dictionary for a match:
+    #
+    if (exists ($goto_hash{$key_name}))
+    {
+        $found_val = $goto_hash{$key_name};
+    }
+
+
+    # If no match is found in .gotorc,
+    # check if there is a match in optional $DEV directory:
+    #
+    if (! $found_val  &&  $dev_src_path)
+    {
+        opendir (DIR, $dev_src_path);
+
+        my @dir_list  = readdir (DIR);
+
+        foreach my $dir (@dir_list)
+        {
+            chomp ($dir);
+
+            if ($dir eq $key_name)
+            {
+                $found_val = "$dev_src_path/$key_name ";
+            }
+        }
+    }
+
+    # If still no match,
+    # check if there is a match in the current directory:
+    #
+    if (! $found_val)
+    {
+        opendir (DIR, ".");
+
+        my @dir_list  = readdir (DIR);
+
+        foreach my $dir (@dir_list)
+        {
+            chomp ($dir);
+
+            if ($dir eq $key_name)
+            {
+                $found_val = "./$dir ";
+            }
+        }
+    }
+
+
+    # If still no match,
+    # check if there is a partial match in the current directory:
+    #
+    if (! $found_val)
+    {
+        opendir (DIR, ".");
+
+        my @dir_list  = readdir (DIR);
+
+        foreach my $dir (@dir_list)
+        {
+            chomp ($dir);
+
+            if ($dir =~ /^$key_name/)
+            {
+                $found_val = "./$dir ";
+            }
+        }
+    }
+
+
+    my $out_path = '';
+
+    if (! $found_val)
+    {
+        $out_path = "ERROR: No directory found for $key_name - path '$out_path' does not exist.";
+    }
+    else
+    {
+        $out_path = $found_val;
+    }
+
+    # Remove any trailing ctrl chars from $out_path:
+    #
+    $out_path =~ s/\W+$//;
+
+    # Print final path as output:
+    #
+    print "\"$out_path\"\n";
+}
+
+
+sub usage
+{
+    open (SELF, $0);
+
+    while (<SELF>)
+    {
+        print if (/^##/);
+    }
+
+    exit (-1);
+}
+
+
+main ();
+

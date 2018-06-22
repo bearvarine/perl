@@ -1,0 +1,511 @@
+#!/usr/bin/env perl
+
+## NAME
+##     tcp_ser
+##
+##     Ver 1.0  2016-03-28
+##
+## DESCRIPTION
+##    A simple TCP listener.  Echos text string from connected client.
+##
+## SYNTAX
+##     tcp_ser <ip-addr> <port> [-t] [-x|X] [-o <fspec>]
+##
+## PARAMETERS
+##     <ip-addr>  IP Address to listen on
+##     <port>     Port       to listen on
+##
+## OPTIONS
+##     -d          Turn on debug logging
+##     -h          Show syntax
+##     -o <fspec>  Write message packets to file <fspec>
+##     -t          If set, prepend current timestamp to each received msg.
+##     -x          If set, display received data as hex dump.
+##
+## AUTHOR
+##      David S. "Pat" Patterson
+
+#use strict;
+use IO::Socket::INET;
+use IO::Handle;
+use warnings;
+
+# Default values:
+our $DEBUG = 0;
+
+our ($ARG_1, $ARG_2, $ARG_d, $ARG_h, $ARG_o, $ARG_t, $ARG_X, $ARG_x) = '';
+
+#=========================================================================
+
+sub main ()
+{
+    # flush after every write
+    $| = 1;
+
+    if (@ARGV)
+    {
+      my $success_flag = getArgs ('::dho:tXx', 1);
+
+      print "success_flag=$success_flag\n"  if ($DEBUG);
+
+      usage ('Syntax error')  unless ($success_flag);
+
+      $DEBUG = 1  if ($ARG_d);
+    }
+    else
+    {
+      usage ('Syntax error: 2 required arguments');
+    }
+
+    if ($ARG_h)
+    {
+      usage ('');
+    }
+
+    # Sanity-check input paramters:
+    #
+    if (! $ARG_1  ||  ! $ARG_2)
+    {
+        usage ("tcp_ser <ip-addr> <port> [-t] [-x|X] [-o <fspec>]");
+    }
+
+    run ();
+}
+
+#=========================================================================
+
+sub run ()
+{
+    # bytes per line of output:
+    my $bpl = 16;
+
+    my $hex_out = ($ARG_x ? 'x' : ($ARG_X ? 'X' : ''));
+
+    print "hex_out: $hex_out\n"  if ($DEBUG);
+
+
+    # We call IO::Socket::INET->new() to create the UDP Socket and bound
+    # to specific port number mentioned in LocalPort. There is no need to provide
+    # LocalAddr explicitly as in TCPServer unless you have multiple interfaces.
+
+    my $socket = new IO::Socket::INET (
+        LocalAddr => "$ARG_1",
+        LocalPort => "$ARG_2",
+        Proto => 'tcp', Listen => 5,
+        Reuse => 1
+    );
+
+    die "ERROR in Socket Creation : $!\n"  unless $socket;
+
+    print "Listening on $ARG_1 port $ARG_2:\n";
+
+    # waiting for a new client connection
+    my $client_socket = $socket->accept ();
+
+    # get information about a newly connected client
+    my $client_address = $client_socket->peerhost ();
+    my $client_port    = $client_socket->peerport ();
+
+    print "connection from $client_address:$client_port\n";
+
+
+    my $fo1;
+
+    if ($ARG_o)
+    {
+        open ($fo1, '>', $ARG_o)  or die "Unable to open $ARG_o for writing\n";
+
+        binmode ($fo1);
+
+        $fo1->autoflush (1);
+    }
+
+    while (1)
+    {
+        my $recv_data;
+
+        # Read operation on the socket:
+        $client_socket->recv ($recv_data, 1024);
+
+        #-------------------------------
+        #Process Received data:
+
+        my $ts = ($ARG_t  ?  getTimestamp ()  :  '');
+
+        my $len = length ($recv_data);
+
+        if ($ARG_o  &&  $len)
+        {
+            print "${ts}print $len bytes to $ARG_o\n";
+
+            print $fo1 "${ts}$recv_data";
+        }
+
+        # close FO1;
+
+        # Get the peer host and peer port at which the recent data received:
+        my $peer_address = $client_socket->peerhost();
+        my $peer_port    = $client_socket->peerport();
+
+        print "${ts}Message from ($peer_address:$peer_port), $len bytes: ";
+
+        my $out_buf = '';
+
+        if ($hex_out)
+        {
+            print "\n";
+
+            print "len=$len\n"  if ($DEBUG);
+
+            my $out_line = '';
+            my $char_map = '';
+
+            my $i;  # Iterates through each byte of received data
+
+            for ($i = 0; $i < $len;  $i++)
+            {
+                if ($i % $bpl == 0)
+                {
+                    # Generate a new output buffer line after every $bpl chars.
+                    # Here we generate the block line numbers in decimal and hex.
+                    $out_line = sprintf ("%6.6d %6.6X  ", $i, $i);
+                    $out_buf .= $out_line;
+                    $char_map = '';
+                }
+
+                # Fetch the next byte:
+                my $bin = substr ($recv_data, $i, 1);
+
+                # Convert byte into an numerical ascii value (e.g. '@' --> 64)
+                my $binval = ord ($bin);
+
+                print "$i: binval=$binval\n"  if ($DEBUG);
+
+                # Generate a printable character for this byte for the charmap.
+                $char_map .= (($binval >= 32  &&  $binval < 127) ? $bin : '·');
+
+                # Generate the hex equiv of the byte and append to $out_line.
+                $out_line = sprintf ("%2.2$hex_out ", $binval);
+                $out_buf .= $out_line;
+
+
+                if (($i + 1) % $bpl == 0)
+                {
+                    # last char in current output line, append the charmap.
+                    $out_buf .= "  $char_map\n";
+                }
+                elsif (($i + 1) % 4 == 0)
+                {
+                    # output an extra char every 4th byte.
+                    $out_buf .= ' ';
+                }
+            }
+
+            # Generate correct space padding for appending the char map onto
+            # the end of a partial last line.
+
+            # $i (at this point) is the total number of byte elements output.
+
+            # $c is the number of missing byte elements on the line.
+            my $c = ($bpl - ($i % $bpl)) % $bpl;
+
+            my $d = int (($c - 1) / 4);
+
+            print "i=$i c=$c d=$d\n"  if ($DEBUG);
+
+            if ($c)
+            {
+                $out_buf .= '   ' x $c . ' ' x $d . "  $char_map\n";
+            }
+
+            print "$out_buf\n";
+        }
+        else
+        {
+            print "${ts}$recv_data\n\n";
+        }
+
+        #send the data to the client at which the read/write operations done recently.
+        # my $data = "server: received your $len bytes.\n";
+        # $socket->send ($data);
+    }
+
+    shutdown ($client_socket, 1);
+
+    $socket->close();
+}
+
+
+
+sub getTimestamp ($)
+{
+    my ($abs_secs) = @_;
+
+    my ($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst) =
+        (defined ($abs_secs) ? localtime ($abs_secs) : localtime ());
+
+    my $result = sprintf ("%s-%02s-%02s %02s:%02s:%02s: ", $year + 1900, $mon + 1, $mday, $hour, $min, $sec);
+
+    return $result;
+}
+
+#=========================================================================
+
+# Function:   getArgs
+#
+# Description:
+#   Read in and validate any command line arguments.
+#
+# Usage:
+#
+#   - $options
+#   Given a standard getopts argument string (e.g. "a:bc" implies 3 possible
+#   options where -a takes an argument but options -b and -c do not), create
+#   global variables of the type $ARG_c, where c is the option letter.
+#   The global variable will contain either the option's argument or 1
+#   if the option has no argument.
+#
+#   - $preCreateFlag (optional)
+#   If true, a variable is pre-created for each legal option,
+#   regardless of whether that option is actually used on the command line.
+#
+#   Mandatory "Bare" arguments (arguments with no preceding option) are
+#   specified by one or more colons at the beginning of the argument string.
+#
+#   (e.g. "::a:bc" implies that two mandatory bare arguments are expected).
+#   These arguments are placed in variables of the type ARG_n, where n
+#   is the bare argument's order of appearance, beginning with 1.
+#
+#   Optional Bare arguments are specified by one or more question marks
+#   at the beginning of the argument string, after any mandatory bare
+#   argument colons.
+#
+#   (e.g. "::?a:bc" implies that two mandatory bare arguments and one
+#   optional bare argument are expected).
+#
+# Global variables used:
+#    @ARGV      Array containing the incoming command line args
+#    $ARG_<x>   Where <x> is a command line switch -<x> as described above.
+#    $DEBUG     If true, prints argument list.
+#
+# Return Values:
+#    true on success;  false on errors.
+#
+#    2006-04-02:  Added $preCreateFlag back in as an option.
+#                 Some code cleanup.
+#
+sub getArgs ($$)
+{
+    my ($options, $preCreateFlag) = @_;
+
+    my ($state,     # 0 - get option (or bare arg)   1 - get arg
+        $opt,       # current option or arg being processed
+        $c,         # option character
+        $nbare,     # expected bare arg count
+        $nc,        # number of colons/current colon match pattern
+        $nq,        # number of question marks
+        $n);        # current bare arg count
+
+    my $true  = 1;
+    my $false = '';
+
+    my $successFlag = $false;
+
+    for (;;)  # Using as a one-pass block
+    {
+        # Pre-create each legal option variable:
+        #
+        if ($preCreateFlag)
+        {
+            my @opts = split (//, $options);
+
+            $n = 1;  # Bare arg indexer
+
+            for (my $i = 0;  $i < @opts;  ++$i)
+            {
+                $opt = $opts[$i];
+
+                if ($opt eq ':'  ||  $opt eq '?')
+                {
+                    ${"ARG_$n"} = '';
+
+                    $n++;
+                }
+                else
+                {
+                    ${"ARG_$opt"} = ''  if ($opt ne ':');
+                }
+            }
+        }
+
+        # Calculate number of expected bare arguments:
+        #
+        ($nc, $nq) = ($options =~ /^(:*)(\?*)/);
+
+        print "nc=$nc nq=$nq\n"  if ($DEBUG);
+
+        $nc = (defined ($nc)  ?  length ($nc)  : 0);
+        $nq = (defined ($nq)  ?  length ($nq)  : 0);
+
+        print "nc=$nc nq=$nq\n"  if ($DEBUG);
+
+
+        # Process arguments:
+        #
+        $n = 0;
+
+        my $opSuccessFlag = $true;
+
+        my $l = scalar (@ARGV);
+
+        for (my $i = 0;  $i < $l;  $i++)
+        {
+            $arg = $ARGV[$i];
+
+            if ($arg =~ /^\-(\w)/)  # process switch arg
+            {
+                my ($c, $opt) = ($arg =~ /^\-(\w)(.*)/);
+
+                print "c=$c opt=$opt\n"  if ($DEBUG);
+
+                if ($options =~ /$c:/)   # arg requires option
+                {
+                    if (length ($opt) == 0)
+                    {
+                        # Next arg must be option:
+                        if ($i + 1 < $l)
+                        {
+                            $i += 1;
+
+                            $opt = $ARGV[$i];
+
+                            if ($opt =~ /^\-(\w)/)
+                            {
+                                print "$0 Syntax: L1: Missing option for '-$c'\n";
+                                $opSuccessFlag = $false;
+                                last;
+                            }
+                        }
+                        else
+                        {
+                            print "$0 Syntax: L2: Missing option for '-$c'\n";
+                            $opSuccessFlag = $false;
+                            last;
+                        }
+                    }
+
+                    ${"ARG_$c"} = $opt;
+                }
+                elsif ($options =~ /$c/)  # option alone
+                {
+                    ${"ARG_$c"} = 1;
+
+                    if ($opt ne '')
+                    {
+                        print "$0 Syntax: L3: Unexpected argument '$opt'\n";
+
+                        $opSuccessFlag = $false;
+
+                        last;
+                    }
+                }
+                else
+                {
+                    print "$0 Syntax: L4: Unexpected option '$opt'\n";
+
+                    $opSuccessFlag = $false;
+
+                    last;
+                }
+            }
+            elsif ($n < $nc)   # process bare arg
+            {
+                $n++;
+
+                ${"ARG_$n"} = $arg;
+            }
+            elsif ($n >= $nc  &&  $n < $nc + $nq)   # process optional bare arg
+            {
+                $n++;
+
+                ${"ARG_$n"} = $arg;
+            }
+            else
+            {
+                print "$0 Syntax: L5: Unexpected argument '$arg'\n";
+
+                $opSuccessFlag = $false;
+
+                last;
+            }
+        }
+
+        last unless ($opSuccessFlag);
+
+        $successFlag = 1;
+
+        last;  # loop runs only once
+
+    };  # End single pass loop
+
+
+    if ($DEBUG)  # print all arguments:
+    {
+        foreach my $opt (split //, $options)
+        {
+            my $arg = "ARG_$opt";
+
+            if (defined ${$arg})
+            {
+                print "$arg='${$arg}'\n"  if ($opt ne ':');
+            }
+        }
+
+        foreach my $val (1 .. $n)
+        {
+            my $arg = "ARG_$val";
+
+            print "$arg='${$arg}'\n";
+        }
+
+        print "\n";
+    }
+
+    return $successFlag;
+}
+
+#=========================================================================
+
+sub usage ($)
+{
+  my ($err_msg) = @_;
+
+  print "$err_msg\n";
+
+  sleep (1);
+
+  open (SELF, $0);
+
+  while (<SELF>)
+  {
+    if (/^##/)
+    {
+      s/^## ?//;
+
+      print $_;
+    }
+  }
+
+  exit (-1);
+}
+
+#=========================================================================
+# Startup:
+#
+# Run program:
+#
+main ();
+
+#=========================================================================
+#=========================================================================
+

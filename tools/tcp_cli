@@ -1,0 +1,535 @@
+#!/usr/bin/env perl
+## NAME
+##     tcp_cli
+##
+##     Ver 1.0  2015-07-21
+##     Ver 1.6  2016-03-14  Add -s switch for single-step sending.
+##     Ver 1.7  2016-12-06  Add -b switch for simulating multi-line message blocks.
+##     Ver 1.8  2016-12-13  Add -a switch for appending strings to end of messages.
+##
+## DESCIPTION
+##     Simple TCP client - reads msgs from file and sends them to the specified TCP listener/server.
+##
+## SYNTAX
+##     tcp_cli <server-ip-addr> <server-port> <msg-file> [options]
+##
+## PARAMETERS
+##     <server-ip-addr>  IP Address to send to
+##     <server-port>     Port       to send to
+##     <msg-file>        File holding list of msgs to send.
+##                       To add explicit delays, insert a line following a message
+##                       with a (float) number of secs to sleep.
+##                       Blank lines and lines beginning with # are ignored.
+## OPTIONS
+##     -a <string>       Append <string> to the end of each message.
+##     -b <char>         Message block delimiter character.  (For multi-line messages)
+##     -c <count>        Send up to <count> messages.
+##     -d <secs>         Delay n.m secs between all messages.
+##     -f <offset>       First message starts with msg number <offset>.
+##     -i                Ignore all text outside outer braces.
+##     -s                Single-step send, <CR> to continue.
+##
+##     -D                Turn on debug logging
+##     -h                Show syntax
+##
+## AUTHOR
+##      David S. "Pat" Patterson
+
+
+use IO::Socket::INET;
+use Time::HiRes;
+use warnings;
+
+
+# Default values:
+our $DEBUG = 0;
+
+our ($ARG_1, $ARG_2, $ARG_3, $ARG_b, $ARG_c, $ARG_d, $ARG_D, $ARG_f, $ARG_i, $ARG_s, $ARG_h) = '';
+
+#=========================================================================
+
+sub main ()
+{
+    # flush after every write
+    $| = 1;
+
+    if (@ARGV)
+    {
+        my $success_flag = getArgs (':::a:b:c:Dd:f:ish', 1);
+
+        print "success_flag=$success_flag\n"  if ($DEBUG);
+
+        usage ('Syntax error')  unless ($success_flag);
+
+        $DEBUG = 1  if ($ARG_D);
+    }
+    else
+    {
+        usage ('Syntax error: 3 required arguments');
+    }
+
+    if ($ARG_h)
+    {
+        usage ('');
+    }
+
+    # Sanity-check input paramters:
+    #
+    if (! $ARG_1  ||  ! $ARG_2  ||  ! $ARG_3)
+    {
+        usage ('');
+    }
+
+    print "::DEBUG:: ARG_1=$ARG_1 ARG_2=$ARG_2 ARG_3=$ARG_3 ARG_a=$ARG_a ARG_b=$ARG_b ARG_c=$ARG_c ARG_d=$ARG_d ARG_f=$ARG_f ARG_i=$ARG_i ARG_s=$ARG_s\n"  if ($DEBUG);
+
+    run ();
+}
+
+#=========================================================================
+
+sub run ()
+{
+    # Read in the msg file:
+    #
+    open (FI1, $ARG_3)  or die ("Could not read from file $ARG_3");
+
+    @msg_list = <FI1>;
+
+    close FI1;
+
+
+    my $peer_addr = "$ARG_1:$ARG_2";
+
+    print "Establishing TCP connection with server at: $peer_addr\n";
+
+    # Establish the connection session:
+    #
+    my $socket = new IO::Socket::INET (
+        PeerHost => $ARG_1,
+        PeerPort => $ARG_2,
+        Proto => 'tcp',
+    );
+
+    die "Cannot connect to the TCP server $!\n" unless $socket;
+
+    print "Connected to the server\n";
+
+
+    my $n;
+
+    if ($ARG_a)
+    {
+        # Convert meta-linefeeds into real ones:
+        $ARG_a =~ s/\\n/\n/g;
+    }
+
+    if ($ARG_b)  # Preprocess list and combine multi-line messages:
+    {
+        # Expected msg format (assuming $ARG_b is ')
+        # 'msg 01
+        # '
+        # 'msg 02
+        # msg 03
+        # '
+
+        $n = scalar (@msg_list);
+
+        my @tmp_msg_list = @msg_list;
+
+        @msg_list = ();
+
+        my $state = 0;
+
+        for (my $k = 0;  $k < $n;  $k++)
+        {
+            my $line = $tmp_msg_list[$k];
+
+            next  if ($line =~ /^\s*$/  ||  $line =~ /^#/);
+
+            if ($state == 0)
+            {
+                if ($line =~ /^$ARG_b[^$ARG_b]+$/)
+                {
+                    ($msg) = ($line =~ /^$ARG_b([^$ARG_b]+)$/);
+
+                    $state = 1;
+                }
+                else
+                {
+                    print "Error: message blocking error 0001, line $k\n";
+                    exit;
+                }
+            }
+            elsif ($state == 1)
+            {
+                if ($line =~ /^$ARG_b$/)
+                {
+                    if ($msg)
+                    {
+                        $msg .= "\n";
+
+                        push (@msg_list, $msg);
+
+                        $state = 0;
+                    }
+                    else
+                    {
+                        print "Error: message blocking error 0002, line $k\n";
+                        exit;
+                    }
+                }
+                elsif ($line =~ /^[^$ARG_b]+$/)
+                {
+                    $msg .= "$line";
+                }
+                else
+                {
+                    print "Error: message blocking error 0003, line $k\n";
+                    exit;
+                }
+            }
+        }
+
+        if ($DEBUG)
+        {
+            $k = 0;  # DEBUG
+            foreach $msg (@msg_list)
+            {
+                $k++;
+                print "::DEBUG:: msg $k: [$msg]\n";
+            }
+        }
+    }
+
+
+    $n = scalar (@msg_list);
+
+    # Loop through the message list and send the messages:
+    for (my $i = 0;  $i < $n;  $i++)
+    {
+        last  if ($ARG_c  &&  $i >= $ARG_c);
+
+        my $j;
+
+        if ($ARG_f)
+        {
+            $j = $ARG_f + $i;
+
+            last  if ($j >= $n);
+        }
+        else
+        {
+            $j = $i;
+        }
+
+        my $msg = $msg_list[$j];
+
+        chomp $msg;
+
+        if ($ARG_i)
+        {
+            $msg =~ s/^[^{]+//;
+            $msg =~ s/[^}]+$//;
+
+            print "::DEBUG:: msg=$msg\n"  if ($DEBUG);
+        }
+
+        # Check input line for a number of secs to delay:
+        #
+        if ($msg =~ /^[\d\.]+$/)
+        {
+            print "- sleep $msg secs::\n";
+
+            Time::HiRes::sleep ($msg);
+        }
+        elsif (length ($msg)  &&  $msg !~ /^#/)
+        {
+
+            if ($ARG_s)
+            {
+                print "\nPress <CR> to continue:";
+
+                while (<STDIN>) { last; }
+            }
+
+            $msg .= $ARG_a  if ($ARG_a);
+
+            print "- sending '$msg':\n";
+
+            $socket->send ($msg);
+        }
+
+        if ($ARG_d)
+        {
+            print "- sleep $ARG_d secs:\n"  if ($ARG_D);
+
+            Time::HiRes::sleep ($ARG_d);
+        }
+
+    };
+
+    print "Done.\n";
+
+    $socket->close();
+}
+
+#=========================================================================
+
+# Function:   getArgs
+#
+# Description:
+#   Read in and validate any command line arguments.
+#
+# Usage:
+#
+#   - $options
+#   Given a standard getopts argument string (e.g. "a:bc" implies 3 possible
+#   options where -a takes an argument but options -b and -c do not), create
+#   global variables of the type $ARG_c, where c is the option letter.
+#   The global variable will contain either the option's argument or 1
+#   if the option has no argument.
+#
+#   - $preCreateFlag (optional)
+#   If true, a variable is pre-created for each legal option,
+#   regardless of whether that option is actually used on the command line.
+#
+#   Mandatory "Bare" arguments (arguments with no preceding option) are
+#   specified by one or more colons at the beginning of the argument string.
+#
+#   (e.g. "::a:bc" implies that two mandatory bare arguments are expected).
+#   These arguments are placed in variables of the type ARG_n, where n
+#   is the bare argument's order of appearance, beginning with 1.
+#
+#   Optional Bare arguments are specified by one or more question marks
+#   at the beginning of the argument string, after any mandatory bare
+#   argument colons.
+#
+#   (e.g. "::?a:bc" implies that two mandatory bare arguments and one
+#   optional bare argument are expected).
+#
+# Global variables used:
+#    @ARGV      Array containing the incoming command line args
+#    $ARG_<x>   Where <x> is a command line switch -<x> as described above.
+#    $DEBUG     If true, prints argument list.
+#
+# Return Values:
+#    true on success;  false on errors.
+#
+#    2006-04-02:  Added $preCreateFlag back in as an option.
+#                 Some code cleanup.
+#
+sub getArgs ($$)
+{
+    my ($options, $preCreateFlag) = @_;
+
+    my ($state,     # 0 - get option (or bare arg)   1 - get arg
+        $opt,       # current option or arg being processed
+        $c,         # option character
+        $nbare,     # expected bare arg count
+        $nc,        # number of colons/current colon match pattern
+        $nq,        # number of question marks
+        $n);        # current bare arg count
+
+    my $true  = 1;
+    my $false = '';
+
+    my $successFlag = $false;
+
+    for (;;)  # Using as a one-pass block
+    {
+        # Pre-create each legal option variable:
+        #
+        if ($preCreateFlag)
+        {
+            my @opts = split (//, $options);
+
+            $n = 1;  # Bare arg indexer
+
+            for (my $i = 0;  $i < @opts;  ++$i)
+            {
+                $opt = $opts[$i];
+
+                if ($opt eq ':'  ||  $opt eq '?')
+                {
+                    ${"ARG_$n"} = '';
+
+                    $n++;
+                }
+                else
+                {
+                    ${"ARG_$opt"} = ''  if ($opt ne ':');
+                }
+            }
+        }
+
+        # Calculate number of expected bare arguments:
+        #
+        ($nc, $nq) = ($options =~ /^(:*)(\?*)/);
+
+        print "nc=$nc nq=$nq\n"  if ($DEBUG);
+
+        $nc = (defined ($nc)  ?  length ($nc)  : 0);
+        $nq = (defined ($nq)  ?  length ($nq)  : 0);
+
+        print "nc=$nc nq=$nq\n"  if ($DEBUG);
+
+
+        # Process arguments:
+        #
+        $n = 0;
+
+        my $opSuccessFlag = $true;
+
+        my $l = scalar (@ARGV);
+
+        for (my $i = 0;  $i < $l;  $i++)
+        {
+            $arg = $ARGV[$i];
+
+            if ($arg =~ /^\-(\w)/)  # process switch arg
+            {
+                my ($c, $opt) = ($arg =~ /^\-(\w)(.*)/);
+
+                print "c=$c opt=$opt\n"  if ($DEBUG);
+
+                if ($options =~ /$c:/)   # arg requires option
+                {
+                    if (length ($opt) == 0)
+                    {
+                        # Next arg must be option:
+                        if ($i + 1 < $l)
+                        {
+                            $i += 1;
+
+                            $opt = $ARGV[$i];
+
+                            if ($opt =~ /^\-(\w)/)
+                            {
+                                print "$0 Syntax: L1: Missing option for '-$c'\n";
+                                $opSuccessFlag = $false;
+                                last;
+                            }
+                        }
+                        else
+                        {
+                            print "$0 Syntax: L2: Missing option for '-$c'\n";
+                            $opSuccessFlag = $false;
+                            last;
+                        }
+                    }
+
+                    ${"ARG_$c"} = $opt;
+                }
+                elsif ($options =~ /$c/)  # option alone
+                {
+                    ${"ARG_$c"} = 1;
+
+                    if ($opt ne '')
+                    {
+                        print "$0 Syntax: L3: Unexpected argument '$opt'\n";
+
+                        $opSuccessFlag = $false;
+
+                        last;
+                    }
+                }
+                else
+                {
+                    print "$0 Syntax: L4: Unexpected option '$opt'\n";
+
+                    $opSuccessFlag = $false;
+
+                    last;
+                }
+            }
+            elsif ($n < $nc)   # process bare arg
+            {
+                $n++;
+
+                ${"ARG_$n"} = $arg;
+            }
+            elsif ($n >= $nc  &&  $n < $nc + $nq)   # process optional bare arg
+            {
+                $n++;
+
+                ${"ARG_$n"} = $arg;
+            }
+            else
+            {
+                print "$0 Syntax: L5: Unexpected argument '$arg'\n";
+
+                $opSuccessFlag = $false;
+
+                last;
+            }
+        }
+
+        last unless ($opSuccessFlag);
+
+        $successFlag = 1;
+
+        last;  # loop runs only once
+
+    };  # End single pass loop
+
+
+    if ($DEBUG)  # print all arguments:
+    {
+        foreach my $opt (split //, $options)
+        {
+            my $arg = "ARG_$opt";
+
+            if (defined ${$arg})
+            {
+                print "$arg='${$arg}'\n"  if ($opt ne ':');
+            }
+        }
+
+        foreach my $val (1 .. $n)
+        {
+            my $arg = "ARG_$val";
+
+            print "$arg='${$arg}'\n";
+        }
+
+        print "\n";
+    }
+
+    return $successFlag;
+}
+
+#=========================================================================
+
+sub usage ($)
+{
+  my ($err_msg) = @_;
+
+  print "$err_msg\n";
+
+  sleep (1);
+
+  open (SELF, $0);
+
+  while (<SELF>)
+  {
+    if (/^##/)
+    {
+      s/^## ?//;
+
+      print $_;
+    }
+  }
+
+  exit (-1);
+}
+
+#=========================================================================
+# Startup:
+#
+# Run program:
+#
+main ();
+
+#=========================================================================
+#=========================================================================
+
